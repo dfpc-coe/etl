@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { Stream } from 'stream'
 import path from 'path';
 import cors from 'cors';
 import jwt from 'jsonwebtoken';
@@ -18,6 +19,8 @@ import BlueprintLogin from '@tak-ps/blueprint-login';
 // @ts-ignore
 import Server from './lib/types/server.js';
 import Config from './lib/config.js';
+import TAKAPI from './lib/tak-api.js';
+import { Client } from 'undici';
 
 const args = minimist(process.argv, {
     boolean: [
@@ -199,6 +202,35 @@ export default async function server(config: Config) {
         // TODO: Remove connections
         config.wsClients.push(ws);
     });
+
+    const cert = config.conns.get(3).conn.auth.cert;
+    const key = config.conns.get(3).conn.auth.key;
+
+    const client = new Client('https://ops.cotak.gov:8443', {
+        connect: {
+            //ca: [ readFileSync(join(__dirname, 'server-ca-crt.pem'), 'utf8') ],
+            key,
+            cert,
+            rejectUnauthorized: false,
+            //servername: 'agent1'
+        }
+    });
+async function stream2buffer(stream: Stream): Promise<Buffer> {
+    return new Promise < Buffer > ((resolve, reject) => {
+        const _buf = Array < any > ();
+        stream.on("data", chunk => _buf.push(chunk));
+        stream.on("end", () => resolve(Buffer.concat(_buf)));
+        stream.on("error", (err: Error) => reject(`error converting stream - ${err}`));
+    });
+}
+
+    client.request({
+        path: '/Marti/api/groups/all',
+        method: 'GET'
+    }, async (err, { body }) => {
+        console.error('ERROR', err);
+        console.error('BODY', String(await stream2buffer(body)));
+    })
 
     return new Promise((resolve) => {
         const srv = app.listen(5001, () => {
