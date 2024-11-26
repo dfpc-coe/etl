@@ -1,4 +1,5 @@
 import { std } from '../../std.ts';
+import { sector } from '@turf/sector';
 import { bbox } from '@turf/bbox'
 import { useCOTStore } from '../cots.ts'
 import { useMapStore } from '../map.ts';
@@ -45,7 +46,9 @@ export default class COT {
     _geometry: Feature["geometry"];
 
     _store: ReturnType<typeof useCOTStore>;
-    origin: Origin
+    origin: Origin;
+
+    links: Set<string>;
 
     constructor(feat: Feature, origin?: Origin) {
         feat.properties = COT.style(feat.geometry.type, feat.properties);
@@ -58,6 +61,8 @@ export default class COT {
         this._store = useCOTStore();
         this.origin = origin || { mode: OriginMode.CONNECTION };
 
+        this.links = new Set();
+
         if (!this._properties.archived) {
             this._properties.archived = false
         }
@@ -68,6 +73,10 @@ export default class COT {
 
         if (this.origin.mode === OriginMode.CONNECTION) {
             this._store.pending.set(this.id, this);
+        }
+
+        if (this._properties.sensor) {
+            this.link();
         }
     }
 
@@ -82,18 +91,66 @@ export default class COT {
     set geometry(geometry: Feature["geometry"]) {
         this.update({ geometry })
     }
-
     get geometry() {
         return this._geometry;
+    }
+
+    link(): void {
+        if (this._properties.sensor) {
+            const id = `${this.id}-sensor`
+
+            let updated = false;
+
+            console.error('SENSOR RANGE', this._properties.sensor.range)
+
+            if (this.links.has(id)) {
+                const cot = this._store.get(id);
+                if (cot) {
+                    updated = true;
+
+                    cot.geometry = sector(
+                        this._properties.center,
+                        (this._properties.sensor.range || 10) / 1000,
+                        this._properties.sensor.azimuth,
+                        this._properties.sensor.azimuth + this._properties.sensor.fov,
+                    ).geometry
+                }
+            }
+
+            if (!updated) {
+                // TODO Use NodeCoT & Respect Sensor Style if present
+                new COT({
+                    id,
+                    type: 'Feature',
+                    properties: {
+                        callsign: '',
+                        type: 'u-d-p',
+                        stroke: '#ffffff',
+                        'stroke-width': 1,
+                        'stroke-opacity': 1,
+                        fill: '#ffffff',
+                        'fill-opacity': 0.2
+                    },
+                    geometry: sector(
+                        this._properties.center,
+                        (this._properties.sensor.range || 10) / 1000,
+                        this._properties.sensor.azimuth,
+                        this._properties.sensor.azimuth + this._properties.sensor.fov,
+                    ).geometry
+                });
+
+                this.links.add(id)
+            }
+        }
     }
 
     /**
      * Update the COT and return a boolean as to whether the COT needs to be re-rendered
      */
-    async update(update: {
+    update(update: {
         properties?: Feature["properties"],
         geometry?: Feature["geometry"]
-    }): Promise<boolean> {
+    }): boolean {
         let changed = false;
         if (update.geometry) {
             //TODO Detect Geometry changes, use centroid?!
@@ -110,6 +167,14 @@ export default class COT {
                     break;
                 }
             }
+
+            if (update.properties.sensor) {
+                this.link();
+            } else if (this._properties.sensor && !update.properties.sensor) {
+                // TODO Unlink & cleanup
+            }
+
+            this._properties = update.properties;
         }
 
         if (!this._properties.center) {
